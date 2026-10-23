@@ -1,0 +1,349 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#0b1530" />
+    <title>Room Name</title>
+    <style>
+      :root {
+        --bg: #edf2f9;
+        --surface: #ffffff;
+        --navy: #0b1530;
+        --blue: #1769e0;
+        --blue-light: #eaf3ff;
+        --text: #1c2942;
+        --muted: #78849a;
+        --line: #e2e8f2;
+        --danger: #e43e51;
+        --success: #18a878;
+        --shadow: 0 26px 70px rgba(17, 40, 84, 0.14);
+      }
+
+      * { box-sizing: border-box; }
+
+      body {
+        min-width: 320px;
+        min-height: 100vh;
+        margin: 0;
+        color: var(--text);
+        font-family: "PingFang SC", "Microsoft YaHei", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background:
+          radial-gradient(circle at 0% 0%, #d8ebff 0, transparent 31rem),
+          radial-gradient(circle at 100% 100%, #d9f6ed 0, transparent 30rem),
+          var(--bg);
+      }
+
+      .page {
+        display: grid;
+        min-height: 100vh;
+        padding: 0;
+      }
+
+      .dashboard {
+        display: grid;
+        width: 100%;
+        height: 100vh;
+        grid-template-rows: 15% 80% 5%;
+        overflow: hidden;
+        border: 0;
+        border-radius: 0;
+        background: var(--surface);
+        box-shadow: var(--shadow);
+      }
+
+      .topbar {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 0;
+        padding: 18px 34px;
+        color: #fff;
+        background: linear-gradient(110deg, #0a1a3d, #123f85);
+      }
+
+      .room-title, .top-meta, .meeting-title, .organizer { display: flex; align-items: center; }
+      .room-title { gap: 14px; }
+      .room-icon {
+        display: grid;
+        width: 46px;
+        height: 46px;
+        place-items: center;
+        border-radius: 14px;
+        font-size: 24px;
+        background: rgba(255, 255, 255, 0.14);
+      }
+      .room-name { font-size: 23px; font-weight: 700; letter-spacing: .02em; }
+      .room-subtitle { margin-top: 4px; color: #bdcdf0; font-size: 13px; }
+      .top-meta { gap: 30px; font-weight: 600; }
+      .capacity { color: #dbe9ff; }
+      .clock { min-width: 92px; color: #fff; font-size: 23px; font-variant-numeric: tabular-nums; }
+
+      .content { display: grid; min-height: 0; grid-template-columns: 1.07fr .93fr; }
+      .panel { min-height: 0; padding: 42px 46px; overflow-y: auto; }
+      .current-panel { border-right: 1px solid var(--line); }
+      .schedule-panel { background: #fbfcff; }
+
+      .section-label {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: 0 0 28px;
+        color: #56647c;
+        font-size: 15px;
+        font-weight: 700;
+        letter-spacing: .06em;
+      }
+
+      .status {
+        display: inline-flex;
+        align-items: center;
+        gap: 8px;
+        padding: 9px 13px;
+        border-radius: 999px;
+        color: #bd2238;
+        font-size: 15px;
+        font-weight: 700;
+        background: #fff0f2;
+      }
+      .status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--danger); box-shadow: 0 0 0 5px rgba(228, 62, 81, .12); }
+      .status.is-free { color: #147a58; background: #eaf9f3; }
+      .status.is-free .status-dot { background: var(--success); box-shadow: 0 0 0 5px rgba(24, 168, 120, .12); }
+      .meeting-title { min-height: 92px; margin: 18px 0 28px; font-size: clamp(25px, 3.2vw, 37px); font-weight: 750; line-height: 1.26; letter-spacing: -.03em; }
+      .meeting-title::before { width: 5px; height: 66px; margin-right: 17px; border-radius: 10px; background: var(--blue); content: ""; }
+
+      .details { display: grid; gap: 17px; margin-bottom: 30px; }
+      .detail { display: grid; grid-template-columns: 81px 1fr; gap: 8px; font-size: 16px; line-height: 1.55; }
+      .detail-label { color: var(--muted); }
+      .detail-value { font-weight: 650; }
+
+      .countdown {
+        display: flex;
+        align-items: center;
+        gap: 14px;
+        padding: 15px 17px;
+        margin-bottom: 28px;
+        border: 1px solid #dbe9ff;
+        border-radius: 13px;
+        color: #275aa5;
+        background: var(--blue-light);
+      }
+      .countdown strong { color: #164d9f; font-size: 19px; font-variant-numeric: tabular-nums; }
+
+      .schedule-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+      .schedule-item { display: grid; grid-template-columns: 76px 1fr; gap: 14px; padding: 14px 12px; border-radius: 12px; transition: background .2s; }
+      .schedule-item:hover { background: #f0f6ff; }
+      .schedule-time { color: #2167c7; font-size: 14px; font-weight: 750; font-variant-numeric: tabular-nums; }
+      .schedule-name { font-size: 15px; font-weight: 650; line-height: 1.45; }
+      .schedule-owner { margin-top: 3px; color: var(--muted); font-size: 13px; }
+      .empty { padding: 28px 0; color: var(--muted); text-align: center; }
+
+      .booking { display: flex; align-items: center; gap: 16px; padding: 17px; margin-top: 24px; border: 1px dashed #aec7eb; border-radius: 15px; background: #f5faff; }
+      .qr { display: grid; width: 76px; height: 76px; flex: 0 0 auto; place-items: center; padding: 5px; border-radius: 7px; background: #fff; box-shadow: 0 2px 8px rgba(30, 78, 144, .13); }
+      .booking-title { color: #2259a7; font-size: 15px; font-weight: 750; }
+      .booking-help { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.4; }
+
+      .footer { display: flex; align-items: center; justify-content: space-between; padding: 6px 34px; border-top: 1px solid var(--line); color: #8994a9; font-size: 12px; background: #fff; }
+      .refresh-note { display: flex; gap: 6px; align-items: center; }
+      .refresh-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+
+      @media (max-width: 760px) {
+        .page { padding: 0; }
+        .dashboard { border-radius: 0; }
+        .topbar { align-items: flex-start; padding: 20px; }
+        .top-meta { align-items: flex-end; flex-direction: column; gap: 5px; }
+        .capacity { font-size: 13px; }
+        .clock { font-size: 18px; text-align: right; }
+        .content { grid-template-columns: 1fr; }
+        .panel { min-height: 0; padding: 31px 25px; }
+        .current-panel { border-right: 0; border-bottom: 1px solid var(--line); }
+        .footer { padding: 6px 20px; }
+        .footer span:last-child { display: none; }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="page">
+      <section class="dashboard" aria-label="Meeting room status dashboard">
+        <header class="topbar">
+          <div class="room-title">
+            <div class="room-icon" aria-hidden="true">▦</div>
+            <div>
+              <div class="room-name" id="roomName">Room 402</div>
+              <div class="room-subtitle">Real-time meeting room status</div>
+            </div>
+          </div>
+          <div class="top-meta">
+            <span class="capacity" id="capacity">Capacity: 10 people</span>
+            <time class="clock" id="clock">--:--</time>
+          </div>
+        </header>
+
+        <div class="content">
+          <section class="panel current-panel" aria-labelledby="currentStatus">
+            <p class="section-label" id="currentStatus">🚨 CURRENT STATUS</p>
+            <div class="status" id="statusBadge"><i class="status-dot"></i><span id="statusText">Loading</span></div>
+            <h1 class="meeting-title" id="meetingTitle">Retrieving room status</h1>
+            <div class="details">
+              <div class="detail"><span class="detail-label">Organizer</span><span class="detail-value" id="organizer">—</span></div>
+              <div class="detail"><span class="detail-label">Time</span><span class="detail-value" id="meetingTime">—</span></div>
+            </div>
+            <div class="countdown">⏳ <span id="countdown">Syncing room status</span></div>
+          </section>
+
+          <section class="panel schedule-panel" aria-labelledby="futureSchedule">
+            <p class="section-label" id="futureSchedule">🕒 REMAINING SCHEDULE TODAY</p>
+            <ul class="schedule-list" id="scheduleList"></ul>
+            <div class="booking">
+              <div class="qr" aria-label="DingTalk quick-booking QR code placeholder">
+                <svg viewBox="0 0 70 70" width="66" height="66" aria-hidden="true">
+                  <rect width="70" height="70" fill="white"/>
+                  <g fill="#152345">
+                    <path d="M4 4h19v19H4zm4 4v11h11V8zM47 4h19v19H47zm4 4v11h11V8zM4 47h19v19H4zm4 4v11h11V51zM29 5h5v5h-5zm7 0h5v5h-5zm-7 8h5v5h-5zm7 6h5v5h-5zm7-6h5v5h-5zm-14 12h5v5h-5zm7 0h5v5h-5zm7 0h5v5h-5zm14 0h5v5h-5zm-21 7h5v5h-5zm14 0h5v5h-5zm7 0h5v5h-5zm-21 7h5v5h-5zm7 0h5v5h-5zm14 0h5v5h-5zm7 0h5v5h-5zm-21 7h5v5h-5zm7 0h5v5h-5zm14 0h5v5h-5zm7 0h5v5h-5zm-14 7h5v5h-5zm7 0h5v5h-5z"/>
+                  </g>
+                </svg>
+              </div>
+              <div>
+                <div class="booking-title">📱 Scan to Book Quickly</div>
+                <div class="booking-help">Scan the QR code with DingTalk to view available times and book the room.</div>
+              </div>
+            </div>
+          </section>
+        </div>
+
+        <footer class="footer">
+          <span class="refresh-note"><i class="refresh-dot"></i><span id="syncState">Data synchronized</span></span>
+          <span id="lastUpdated">Last updated: --</span>
+        </footer>
+      </section>
+    </main>
+
+    <script>
+      const USE_MOCK_DATA = false;
+      const ROOM_ID = new URLSearchParams(window.location.search).get("roomId")?.trim();
+      const API_BASE_URL = "http://172.18.110.32:8080";
+      const REFRESH_INTERVAL = 30_000;
+      let currentMeetingEndAt;
+
+      const mockRoomData = {
+        room: { name: "Room 402", capacity: 10 },
+        currentMeeting: {
+          status: "In use",
+          title: "Cross-Border E-commerce Operations Weekly Meeting",
+          organizer: "Zhang, Operations Department",
+          startTime: "09:00",
+          endTime: "12:30",
+          endAt: new Date(Date.now() + 66 * 60 * 1000).toISOString()
+        },
+        upcomingMeetings: [
+          { startTime: "13:00", endTime: "14:00", title: "Department Weekly Meeting", owner: "Project Team A" },
+          { startTime: "14:30", endTime: "15:30", title: "New Employee Orientation", owner: "HR" },
+          { startTime: "16:00", endTime: "17:00", title: "Product Requirements Review", owner: "Product Department" }
+        ]
+      };
+
+      // When false, call the backend API here. Do not expose the DingTalk AppSecret in the frontend.
+      async function getMeetingRoomStatus() {
+        if (USE_MOCK_DATA) {
+          return structuredClone(mockRoomData);
+        }
+        if (!ROOM_ID) {
+          throw new Error("Missing meeting room ID. Include the roomId parameter in the URL.");
+        }
+
+        const response = await fetch(`${API_BASE_URL}/api/dingtalk/meeting-rooms/${encodeURIComponent(ROOM_ID)}/status`, {
+          cache: "no-store"
+        });
+        if (!response.ok) throw new Error("Failed to retrieve meeting room data.");
+        return response.json();
+      }
+
+      function translateStatus(status) {
+        return {
+          "\u4f7f\u7528\u4e2d": "In use",
+          "\u4f1a\u8bae\u4e2d": "In progress",
+          "\u7a7a\u95f2": "Available"
+        }[status] ?? status;
+      }
+
+      function updateClock() {
+        document.querySelector("#clock").textContent = new Intl.DateTimeFormat("en-US", {
+          hour: "2-digit", minute: "2-digit", hour12: false
+        }).format(new Date());
+      }
+
+      function updateCountdown(endAt) {
+        if (!endAt) {
+          document.querySelector("#countdown").textContent = "The room is currently available";
+          return;
+        }
+        const remainingMinutes = Math.max(0, Math.ceil((new Date(endAt) - Date.now()) / 60_000));
+        document.querySelector("#countdown").innerHTML = remainingMinutes
+          ? `<strong>${remainingMinutes} minutes</strong> remaining`
+          : "This meeting is ending soon";
+      }
+
+      function renderSchedule(meetings) {
+        const scheduleList = document.querySelector("#scheduleList");
+        if (!meetings.length) {
+          scheduleList.innerHTML = '<li class="empty">No more meetings scheduled today</li>';
+          return;
+        }
+        scheduleList.innerHTML = meetings.map((meeting) => `
+          <li class="schedule-item">
+            <div class="schedule-time">${meeting.startTime}<br>-${meeting.endTime}</div>
+            <div><div class="schedule-name">${meeting.title}</div><div class="schedule-owner">${meeting.owner}</div></div>
+          </li>
+        `).join("");
+      }
+
+      function renderRoom(data) {
+        const { room = {}, currentMeeting, upcomingMeetings } = data;
+        const roomName = typeof room.name === "string" ? room.name.trim() : "";
+        document.querySelector("#roomName").textContent = roomName && roomName !== room.id ? roomName : "Room Name";
+        const capacity = Number.isInteger(room.capacity) && room.capacity > 0 ? room.capacity : undefined;
+        document.querySelector("#capacity").textContent = capacity ? `Capacity: ${capacity} people` : "Capacity: — people";
+        const status = translateStatus(currentMeeting.status);
+        document.querySelector("#statusBadge").classList.toggle("is-free", status === "Available");
+        document.querySelector("#statusText").textContent = status;
+        document.querySelector("#meetingTitle").textContent = currentMeeting.title;
+        document.querySelector("#organizer").textContent = currentMeeting.organizer;
+        document.querySelector("#meetingTime").textContent = `${currentMeeting.startTime} - ${currentMeeting.endTime}`;
+        currentMeetingEndAt = currentMeeting.endAt;
+        updateCountdown(currentMeeting.endAt);
+        renderSchedule(upcomingMeetings);
+        document.querySelector("#lastUpdated").textContent = `Last updated: ${new Intl.DateTimeFormat("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }).format(new Date())}`;
+      }
+
+      function renderUnavailable() {
+        currentMeetingEndAt = undefined;
+        document.querySelector("#statusBadge").classList.remove("is-free");
+        document.querySelector("#statusText").textContent = "Data unavailable";
+        document.querySelector("#meetingTitle").textContent = "Unable to retrieve room status";
+        document.querySelector("#organizer").textContent = "—";
+        document.querySelector("#meetingTime").textContent = "—";
+        document.querySelector("#countdown").textContent = "Check the service and DingTalk access credentials";
+        document.querySelector("#scheduleList").innerHTML = '<li class="empty">No schedule data available</li>';
+      }
+
+      async function refreshRoomStatus() {
+        const syncState = document.querySelector("#syncState");
+        try {
+          const roomData = await getMeetingRoomStatus();
+          renderRoom(roomData);
+          syncState.textContent = "Data synchronized";
+        } catch (error) {
+          console.error(error);
+          renderUnavailable();
+          syncState.textContent = "Data synchronization failed";
+        }
+      }
+
+      updateClock();
+      refreshRoomStatus();
+      setInterval(updateClock, 1_000);
+      setInterval(refreshRoomStatus, REFRESH_INTERVAL);
+      setInterval(() => currentMeetingEndAt && updateCountdown(currentMeetingEndAt), 10_000);
+    </script>
+  </body>
+</html>
