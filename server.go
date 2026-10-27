@@ -20,9 +20,10 @@ import (
 
 const (
 	defaultDingTalkBaseURL          = "https://api.dingtalk.com"
+	defaultDingTalkOAPIBaseURL      = "https://oapi.dingtalk.com"
 	dingTalkResponseLimit           = 2 << 20
 	tokenRefreshLead                = time.Minute
-	defaultDashboardRefreshInterval = 30 * time.Second
+	defaultDashboardRefreshInterval = 300 * time.Second
 )
 
 var meetingRoomIDByNumber = map[string]string{
@@ -78,6 +79,12 @@ type meetingOrganizerRef struct {
 	DisplayName string `json:"displayName"`
 }
 
+type calendarEvent struct {
+	ID        string              `json:"id"`
+	Summary   string              `json:"summary"`
+	Organizer meetingOrganizerRef `json:"organizer"`
+}
+
 type dashboardRoom struct {
 	ID       string          `json:"id"`
 	Name     string          `json:"name"`
@@ -128,12 +135,17 @@ type dingTalkClient struct {
 	appKey          string
 	appSecret       string
 	baseURL         string
+	oapiBaseURL     string
 	httpClient      *http.Client
 	dashboardUserID string
 	location        *time.Location
 	tokenMu         sync.Mutex
 	accessToken     string
 	tokenExpiresAt  time.Time
+	eventMu         sync.Mutex
+	eventCache      map[string]calendarEvent
+	organizerMu     sync.Mutex
+	organizerNames  map[string]string
 }
 
 type dashboardScheduleCache struct {
@@ -141,6 +153,11 @@ type dashboardScheduleCache struct {
 	schedules meetingRoomScheduleResponse
 	updatedAt time.Time
 	ready     bool
+}
+
+type dashboardRefreshWindow struct {
+	startMinute int
+	endMinute   int
 }
 
 func (cache *dashboardScheduleCache) store(schedules meetingRoomScheduleResponse, updatedAt time.Time) {
@@ -200,6 +217,112 @@ func (client *dingTalkClient) getMeetingRoomSchedule(
 		"/v1.0/calendar/users/"+url.PathEscape(request.UserID)+"/meetingRooms/schedules/query",
 		body,
 	)
+}
+
+func (client *dingTalkClient) getCalendarEvent(
+	ctx context.Context,
+	userID string,
+	eventID string,
+) (calendarEvent, error) {
+	cacheKey := userID + ":" + eventID
+	client.eventMu.Lock()
+	cachedEvent, found := client.eventCache[cacheKey]
+	client.eventMu.Unlock()
+	if found {
+		return cachedEvent, nil
+	}
+
+	responseBody, statusCode, err := client.callDingTalk(
+		ctx,
+		http.MethodGet,
+		"/v1.0/calendar/users/"+url.PathEscape(userID)+
+			"/calendars/primary/events/"+url.PathEscape(eventID),
+		nil,
+	)
+	if err != nil {
+		return calendarEvent{}, err
+	}
+	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
+		return calendarEvent{}, dingTalkStatusError(statusCode, responseBody)
+	}
+
+	var event calendarEvent
+	if err := json.Unmarshal(responseBody, &event); err != nil {
+		return calendarEvent{}, fmt.Errorf("decode DingTalk calendar event: %w", err)
+	}
+
+	client.eventMu.Lock()
+	if client.eventCache == nil {
+		client.eventCache = make(map[string]calendarEvent)
+	}
+	client.eventCache[cacheKey] = event
+	client.eventMu.Unlock()
+	return event, nil
+}
+
+func (client *dingTalkClient) getOrganizerName(ctx context.Context, unionID string) (string, error) {
+	client.organizerMu.Lock()
+	name, found := client.organizerNames[unionID]
+	client.organizerMu.Unlock()
+	if found {
+		return name, nil
+	}
+
+	accessToken, err := client.getAccessToken(ctx)
+	if err != nil {
+		return "", err
+	}
+	userIDResponse, err := client.callOAPI(ctx, "/topapi/user/getbyunionid", url.Values{
+		"access_token": {accessToken},
+		"unionid":      {unionID},
+	})
+	if err != nil {
+		return "", err
+	}
+	var userIDResult struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+		Result  struct {
+			UserID string `json:"userid"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(userIDResponse, &userIDResult); err != nil {
+		return "", fmt.Errorf("decode DingTalk user ID response: %w", err)
+	}
+	if userIDResult.ErrCode != 0 || strings.TrimSpace(userIDResult.Result.UserID) == "" {
+		return "", fmt.Errorf("resolve DingTalk user ID: %s", userIDResult.ErrMsg)
+	}
+
+	userResponse, err := client.callOAPI(ctx, "/topapi/v2/user/get", url.Values{
+		"access_token": {accessToken},
+		"userid":       {userIDResult.Result.UserID},
+		"language":     {"zh_CN"},
+	})
+	if err != nil {
+		return "", err
+	}
+	var userResult struct {
+		ErrCode int    `json:"errcode"`
+		ErrMsg  string `json:"errmsg"`
+		Result  struct {
+			Name string `json:"name"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(userResponse, &userResult); err != nil {
+		return "", fmt.Errorf("decode DingTalk user response: %w", err)
+	}
+	name = strings.TrimSpace(userResult.Result.Name)
+	if userResult.ErrCode != 0 || name == "" {
+		return "", fmt.Errorf("read DingTalk user name: %s", userResult.ErrMsg)
+	}
+
+	client.organizerMu.Lock()
+	if client.organizerNames == nil {
+		client.organizerNames = make(map[string]string)
+	}
+	client.organizerNames[unionID] = name
+	client.organizerMu.Unlock()
+	return name, nil
 }
 
 func (client *dingTalkClient) getAccessToken(ctx context.Context) (string, error) {
@@ -304,6 +427,33 @@ func (client *dingTalkClient) callDingTalk(
 	return responseBody, response.StatusCode, nil
 }
 
+func (client *dingTalkClient) callOAPI(ctx context.Context, path string, form url.Values) ([]byte, error) {
+	baseURL := client.oapiBaseURL
+	if baseURL == "" {
+		baseURL = defaultDingTalkOAPIBaseURL
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+path, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, fmt.Errorf("create DingTalk OAPI request: %w", err)
+	}
+	request.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=utf-8")
+
+	response, err := client.httpClient.Do(request)
+	if err != nil {
+		return nil, fmt.Errorf("call DingTalk OAPI: %w", err)
+	}
+	defer response.Body.Close()
+
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, dingTalkResponseLimit))
+	if err != nil {
+		return nil, fmt.Errorf("read DingTalk OAPI response: %w", err)
+	}
+	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
+		return nil, dingTalkStatusError(response.StatusCode, responseBody)
+	}
+	return responseBody, nil
+}
+
 func newHTTPHandler(client *dingTalkClient, cache *dashboardScheduleCache) http.Handler {
 	mux := http.NewServeMux()
 
@@ -312,33 +462,7 @@ func newHTTPHandler(client *dingTalkClient, cache *dashboardScheduleCache) http.
 	})
 
 	mux.HandleFunc("POST /v1/meeting-rooms/schedules", func(writer http.ResponseWriter, request *http.Request) {
-		var scheduleRequest meetingRoomScheduleRequest
-		if err := decodeJSONBody(writer, request, &scheduleRequest); err != nil {
-			writeJSON(writer, http.StatusBadRequest, apiError{Error: err.Error()})
-			return
-		}
-
-		var err error
-		scheduleRequest, err = normalizeScheduleRequest(scheduleRequest)
-		if err != nil {
-			writeJSON(writer, http.StatusBadRequest, apiError{Error: err.Error()})
-			return
-		}
-
-		responseBody, statusCode, err := client.getMeetingRoomSchedule(request.Context(), scheduleRequest)
-		if err != nil {
-			log.Printf("DingTalk meeting room schedule request failed: %v", err)
-			writeJSON(writer, http.StatusBadGateway, apiError{Error: "DingTalk API request failed"})
-			return
-		}
-
-		writer.Header().Set("Content-Type", "application/json")
-		if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
-			writer.WriteHeader(http.StatusBadGateway)
-		} else {
-			writer.WriteHeader(http.StatusOK)
-		}
-		_, _ = writer.Write(responseBody)
+		writeJSON(writer, http.StatusGone, apiError{Error: "direct DingTalk schedule queries are disabled; use the cached dashboard status endpoint"})
 	})
 
 	mux.HandleFunc("GET /api/dingtalk/meeting-rooms/{roomId}/status", func(writer http.ResponseWriter, request *http.Request) {
@@ -411,9 +535,44 @@ func refreshDashboardScheduleCache(ctx context.Context, client *dingTalkClient, 
 	if err := json.Unmarshal(responseBody, &schedules); err != nil {
 		return fmt.Errorf("decode DingTalk meeting room schedules: %w", err)
 	}
+	populateScheduleMetadata(ctx, client, &schedules)
 
 	cache.store(schedules, now)
 	return nil
+}
+
+func populateScheduleMetadata(ctx context.Context, client *dingTalkClient, response *meetingRoomScheduleResponse) {
+	for scheduleIndex := range response.MeetingRoomSchedules {
+		populateRoomScheduleMetadata(ctx, client, &response.MeetingRoomSchedules[scheduleIndex])
+	}
+	for scheduleIndex := range response.ScheduleInformation {
+		populateRoomScheduleMetadata(ctx, client, &response.ScheduleInformation[scheduleIndex])
+	}
+}
+
+func populateRoomScheduleMetadata(ctx context.Context, client *dingTalkClient, roomSchedule *meetingRoomSchedules) {
+	for scheduleIndex := range roomSchedule.Schedules {
+		schedule := &roomSchedule.Schedules[scheduleIndex]
+		if strings.TrimSpace(schedule.Organizer.UserID) == "" || strings.TrimSpace(schedule.EventID) == "" {
+			continue
+		}
+
+		name, err := client.getOrganizerName(ctx, schedule.Organizer.UserID)
+		if err != nil {
+			log.Printf("DingTalk organizer name request failed for organizer %s: %v", schedule.Organizer.UserID, err)
+		} else {
+			schedule.Organizer.DisplayName = name
+		}
+
+		event, err := client.getCalendarEvent(ctx, schedule.Organizer.UserID, schedule.EventID)
+		if err != nil {
+			log.Printf("DingTalk event detail request failed for event %s: %v", schedule.EventID, err)
+			continue
+		}
+		if strings.TrimSpace(event.Summary) != "" {
+			schedule.Summary = event.Summary
+		}
+	}
 }
 
 func refreshDashboardScheduleCachePeriodically(
@@ -421,6 +580,7 @@ func refreshDashboardScheduleCachePeriodically(
 	client *dingTalkClient,
 	cache *dashboardScheduleCache,
 	interval time.Duration,
+	refreshWindows []dashboardRefreshWindow,
 ) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -430,6 +590,9 @@ func refreshDashboardScheduleCachePeriodically(
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
+			if !dashboardRefreshAllowedAt(now, client.location, refreshWindows) {
+				continue
+			}
 			if err := refreshDashboardScheduleCache(ctx, client, cache, now.In(client.location)); err != nil {
 				log.Printf("refresh dashboard schedule cache: %v", err)
 			}
@@ -665,6 +828,66 @@ func dashboardRefreshInterval(value string) (time.Duration, error) {
 	return interval, nil
 }
 
+func dashboardRefreshWindows(value string) ([]dashboardRefreshWindow, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil, nil
+	}
+
+	windows := make([]dashboardRefreshWindow, 0, len(strings.Split(value, ",")))
+	for _, windowValue := range strings.Split(value, ",") {
+		windowValue = strings.TrimSpace(windowValue)
+		start, end, found := strings.Cut(windowValue, "-")
+		if !found || strings.Contains(end, "-") {
+			return nil, fmt.Errorf("parse DASHBOARD_REFRESH_WINDOWS: %q must use HH:MM-HH:MM", windowValue)
+		}
+
+		startMinute, err := dashboardRefreshMinute(start)
+		if err != nil {
+			return nil, err
+		}
+		endMinute, err := dashboardRefreshMinute(end)
+		if err != nil {
+			return nil, err
+		}
+		if startMinute == endMinute {
+			return nil, fmt.Errorf("parse DASHBOARD_REFRESH_WINDOWS: %q must not have identical start and end times", windowValue)
+		}
+
+		windows = append(windows, dashboardRefreshWindow{startMinute: startMinute, endMinute: endMinute})
+	}
+	return windows, nil
+}
+
+func dashboardRefreshMinute(value string) (int, error) {
+	parsed, err := time.Parse("15:04", strings.TrimSpace(value))
+	if err != nil {
+		return 0, fmt.Errorf("parse DASHBOARD_REFRESH_WINDOWS: %q must use HH:MM", strings.TrimSpace(value))
+	}
+	return parsed.Hour()*60 + parsed.Minute(), nil
+}
+
+func dashboardRefreshAllowedAt(now time.Time, location *time.Location, windows []dashboardRefreshWindow) bool {
+	localNow := now.In(location)
+	if localNow.Weekday() == time.Saturday || localNow.Weekday() == time.Sunday {
+		return false
+	}
+	if len(windows) == 0 {
+		return true
+	}
+
+	minute := localNow.Hour()*60 + localNow.Minute()
+	for _, window := range windows {
+		if window.startMinute < window.endMinute && minute >= window.startMinute && minute < window.endMinute {
+			return true
+		}
+		if window.startMinute > window.endMinute && (minute >= window.startMinute || minute < window.endMinute) {
+			return true
+		}
+	}
+	return false
+}
+
 func writeJSON(writer http.ResponseWriter, statusCode int, response any) {
 	writer.Header().Set("Content-Type", "application/json")
 	writer.WriteHeader(statusCode)
@@ -708,6 +931,10 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
+	refreshWindows, err := dashboardRefreshWindows(os.Getenv("DASHBOARD_REFRESH_WINDOWS"))
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	client := &dingTalkClient{
 		appKey:          appKey,
@@ -718,11 +945,16 @@ func main() {
 		location:        location,
 	}
 	cache := &dashboardScheduleCache{}
-	if err := refreshDashboardScheduleCache(context.Background(), client, cache, time.Now().In(location)); err != nil {
-		log.Printf("initial dashboard schedule cache refresh failed: %v", err)
+	now := time.Now().In(location)
+	if dashboardRefreshAllowedAt(now, location, refreshWindows) {
+		if err := refreshDashboardScheduleCache(context.Background(), client, cache, now); err != nil {
+			log.Printf("initial dashboard schedule cache refresh failed: %v", err)
+		}
+	} else {
+		log.Printf("skip initial dashboard schedule cache refresh outside workday or refresh window")
 	}
-	go refreshDashboardScheduleCachePeriodically(context.Background(), client, cache, refreshInterval)
+	go refreshDashboardScheduleCachePeriodically(context.Background(), client, cache, refreshInterval, refreshWindows)
 
-	log.Printf("meeting room schedule API listening on %s; dashboard cache refresh interval: %s", address, refreshInterval)
+	log.Printf("meeting room schedule API listening on %s; dashboard cache refresh interval: %s; refresh windows: %s", address, refreshInterval, firstNonEmpty(os.Getenv("DASHBOARD_REFRESH_WINDOWS"), "workdays all day"))
 	log.Fatal(http.ListenAndServe(address, newHTTPHandler(client, cache)))
 }
