@@ -20,19 +20,24 @@ import (
 
 const (
 	defaultDingTalkBaseURL          = "https://api.dingtalk.com"
-	defaultDingTalkOAPIBaseURL      = "https://oapi.dingtalk.com"
 	dingTalkResponseLimit           = 2 << 20
 	tokenRefreshLead                = time.Minute
 	defaultDashboardRefreshInterval = 300 * time.Second
 )
 
-var meetingRoomIDByNumber = map[string]string{
-	"1": "6a54b9f2d4b44318bfaeafe953d4914fb574d07771682d09",
-	"2": "202892463ff2314d533490c228e6847eb574d07771682d09",
-	"3": "2d8e58ea71f66009492807e2949ba1edb574d07771682d09",
-	"4": "5d8e21795c33aa2502bc497bb1db3c81b574d07771682d09",
-	"5": "f8b00c2ed3e6ea2f36c8807a6ccbf605b574d07771682d09",
-	"6": "88181f34d87dd7e67dbf33e867d3a59bb574d07771682d09",
+type meetingRoomMetadata struct {
+	DingTalkID string
+	Name       string
+	Capacity   int
+}
+
+var meetingRoomByNumber = map[string]meetingRoomMetadata{
+	"1": {DingTalkID: "6a54b9f2d4b44318bfaeafe953d4914fb574d07771682d09", Name: "稻妻(Inazuma)"},
+	"2": {DingTalkID: "202892463ff2314d533490c228e6847eb574d07771682d09", Name: "枫丹(Fontaine)"},
+	"3": {DingTalkID: "2d8e58ea71f66009492807e2949ba1edb574d07771682d09", Name: "璃月(Liyue)"},
+	"4": {DingTalkID: "5d8e21795c33aa2502bc497bb1db3c81b574d07771682d09", Name: "蒙徳(Mondstadt)"},
+	"5": {DingTalkID: "f8b00c2ed3e6ea2f36c8807a6ccbf605b574d07771682d09", Name: "纳塔(Natlan)"},
+	"6": {DingTalkID: "88181f34d87dd7e67dbf33e867d3a59bb574d07771682d09", Name: "须弥(Sumeru)"},
 }
 
 type meetingRoomScheduleRequest struct {
@@ -79,14 +84,9 @@ type meetingOrganizerRef struct {
 	DisplayName string `json:"displayName"`
 }
 
-type calendarEvent struct {
-	ID        string              `json:"id"`
-	Summary   string              `json:"summary"`
-	Organizer meetingOrganizerRef `json:"organizer"`
-}
-
 type dashboardRoom struct {
 	ID       string          `json:"id"`
+	Number   string          `json:"number"`
 	Name     string          `json:"name"`
 	Capacity int             `json:"capacity"`
 	Raw      json.RawMessage `json:"raw,omitempty"`
@@ -135,17 +135,12 @@ type dingTalkClient struct {
 	appKey          string
 	appSecret       string
 	baseURL         string
-	oapiBaseURL     string
 	httpClient      *http.Client
 	dashboardUserID string
 	location        *time.Location
 	tokenMu         sync.Mutex
 	accessToken     string
 	tokenExpiresAt  time.Time
-	eventMu         sync.Mutex
-	eventCache      map[string]calendarEvent
-	organizerMu     sync.Mutex
-	organizerNames  map[string]string
 }
 
 type dashboardScheduleCache struct {
@@ -177,8 +172,8 @@ func (cache *dashboardScheduleCache) load() (meetingRoomScheduleResponse, time.T
 }
 
 func allMeetingRoomIDs() []string {
-	roomNumbers := make([]int, 0, len(meetingRoomIDByNumber))
-	for roomNumber := range meetingRoomIDByNumber {
+	roomNumbers := make([]int, 0, len(meetingRoomByNumber))
+	for roomNumber := range meetingRoomByNumber {
 		parsedRoomNumber, err := strconv.Atoi(roomNumber)
 		if err != nil {
 			continue
@@ -189,7 +184,7 @@ func allMeetingRoomIDs() []string {
 
 	roomIDs := make([]string, 0, len(roomNumbers))
 	for _, roomNumber := range roomNumbers {
-		roomIDs = append(roomIDs, meetingRoomIDByNumber[strconv.Itoa(roomNumber)])
+		roomIDs = append(roomIDs, meetingRoomByNumber[strconv.Itoa(roomNumber)].DingTalkID)
 	}
 	return roomIDs
 }
@@ -217,112 +212,6 @@ func (client *dingTalkClient) getMeetingRoomSchedule(
 		"/v1.0/calendar/users/"+url.PathEscape(request.UserID)+"/meetingRooms/schedules/query",
 		body,
 	)
-}
-
-func (client *dingTalkClient) getCalendarEvent(
-	ctx context.Context,
-	userID string,
-	eventID string,
-) (calendarEvent, error) {
-	cacheKey := userID + ":" + eventID
-	client.eventMu.Lock()
-	cachedEvent, found := client.eventCache[cacheKey]
-	client.eventMu.Unlock()
-	if found {
-		return cachedEvent, nil
-	}
-
-	responseBody, statusCode, err := client.callDingTalk(
-		ctx,
-		http.MethodGet,
-		"/v1.0/calendar/users/"+url.PathEscape(userID)+
-			"/calendars/primary/events/"+url.PathEscape(eventID),
-		nil,
-	)
-	if err != nil {
-		return calendarEvent{}, err
-	}
-	if statusCode < http.StatusOK || statusCode >= http.StatusMultipleChoices {
-		return calendarEvent{}, dingTalkStatusError(statusCode, responseBody)
-	}
-
-	var event calendarEvent
-	if err := json.Unmarshal(responseBody, &event); err != nil {
-		return calendarEvent{}, fmt.Errorf("decode DingTalk calendar event: %w", err)
-	}
-
-	client.eventMu.Lock()
-	if client.eventCache == nil {
-		client.eventCache = make(map[string]calendarEvent)
-	}
-	client.eventCache[cacheKey] = event
-	client.eventMu.Unlock()
-	return event, nil
-}
-
-func (client *dingTalkClient) getOrganizerName(ctx context.Context, unionID string) (string, error) {
-	client.organizerMu.Lock()
-	name, found := client.organizerNames[unionID]
-	client.organizerMu.Unlock()
-	if found {
-		return name, nil
-	}
-
-	accessToken, err := client.getAccessToken(ctx)
-	if err != nil {
-		return "", err
-	}
-	userIDResponse, err := client.callOAPI(ctx, "/topapi/user/getbyunionid", url.Values{
-		"access_token": {accessToken},
-		"unionid":      {unionID},
-	})
-	if err != nil {
-		return "", err
-	}
-	var userIDResult struct {
-		ErrCode int    `json:"errcode"`
-		ErrMsg  string `json:"errmsg"`
-		Result  struct {
-			UserID string `json:"userid"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(userIDResponse, &userIDResult); err != nil {
-		return "", fmt.Errorf("decode DingTalk user ID response: %w", err)
-	}
-	if userIDResult.ErrCode != 0 || strings.TrimSpace(userIDResult.Result.UserID) == "" {
-		return "", fmt.Errorf("resolve DingTalk user ID: %s", userIDResult.ErrMsg)
-	}
-
-	userResponse, err := client.callOAPI(ctx, "/topapi/v2/user/get", url.Values{
-		"access_token": {accessToken},
-		"userid":       {userIDResult.Result.UserID},
-		"language":     {"zh_CN"},
-	})
-	if err != nil {
-		return "", err
-	}
-	var userResult struct {
-		ErrCode int    `json:"errcode"`
-		ErrMsg  string `json:"errmsg"`
-		Result  struct {
-			Name string `json:"name"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(userResponse, &userResult); err != nil {
-		return "", fmt.Errorf("decode DingTalk user response: %w", err)
-	}
-	name = strings.TrimSpace(userResult.Result.Name)
-	if userResult.ErrCode != 0 || name == "" {
-		return "", fmt.Errorf("read DingTalk user name: %s", userResult.ErrMsg)
-	}
-
-	client.organizerMu.Lock()
-	if client.organizerNames == nil {
-		client.organizerNames = make(map[string]string)
-	}
-	client.organizerNames[unionID] = name
-	client.organizerMu.Unlock()
-	return name, nil
 }
 
 func (client *dingTalkClient) getAccessToken(ctx context.Context) (string, error) {
@@ -427,33 +316,6 @@ func (client *dingTalkClient) callDingTalk(
 	return responseBody, response.StatusCode, nil
 }
 
-func (client *dingTalkClient) callOAPI(ctx context.Context, path string, form url.Values) ([]byte, error) {
-	baseURL := client.oapiBaseURL
-	if baseURL == "" {
-		baseURL = defaultDingTalkOAPIBaseURL
-	}
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+path, strings.NewReader(form.Encode()))
-	if err != nil {
-		return nil, fmt.Errorf("create DingTalk OAPI request: %w", err)
-	}
-	request.Header.Set("Content-Type", "application/x-www-form-urlencoded;charset=utf-8")
-
-	response, err := client.httpClient.Do(request)
-	if err != nil {
-		return nil, fmt.Errorf("call DingTalk OAPI: %w", err)
-	}
-	defer response.Body.Close()
-
-	responseBody, err := io.ReadAll(io.LimitReader(response.Body, dingTalkResponseLimit))
-	if err != nil {
-		return nil, fmt.Errorf("read DingTalk OAPI response: %w", err)
-	}
-	if response.StatusCode < http.StatusOK || response.StatusCode >= http.StatusMultipleChoices {
-		return nil, dingTalkStatusError(response.StatusCode, responseBody)
-	}
-	return responseBody, nil
-}
-
 func newHTTPHandler(client *dingTalkClient, cache *dashboardScheduleCache) http.Handler {
 	mux := http.NewServeMux()
 
@@ -510,8 +372,8 @@ func newHTTPHandler(client *dingTalkClient, cache *dashboardScheduleCache) http.
 }
 
 func resolveMeetingRoomID(roomNumber string) (string, bool) {
-	roomID, found := meetingRoomIDByNumber[strings.TrimSpace(roomNumber)]
-	return roomID, found
+	metadata, found := meetingRoomByNumber[strings.TrimSpace(roomNumber)]
+	return metadata.DingTalkID, found
 }
 
 func refreshDashboardScheduleCache(ctx context.Context, client *dingTalkClient, cache *dashboardScheduleCache, now time.Time) error {
@@ -535,44 +397,8 @@ func refreshDashboardScheduleCache(ctx context.Context, client *dingTalkClient, 
 	if err := json.Unmarshal(responseBody, &schedules); err != nil {
 		return fmt.Errorf("decode DingTalk meeting room schedules: %w", err)
 	}
-	populateScheduleMetadata(ctx, client, &schedules)
-
 	cache.store(schedules, now)
 	return nil
-}
-
-func populateScheduleMetadata(ctx context.Context, client *dingTalkClient, response *meetingRoomScheduleResponse) {
-	for scheduleIndex := range response.MeetingRoomSchedules {
-		populateRoomScheduleMetadata(ctx, client, &response.MeetingRoomSchedules[scheduleIndex])
-	}
-	for scheduleIndex := range response.ScheduleInformation {
-		populateRoomScheduleMetadata(ctx, client, &response.ScheduleInformation[scheduleIndex])
-	}
-}
-
-func populateRoomScheduleMetadata(ctx context.Context, client *dingTalkClient, roomSchedule *meetingRoomSchedules) {
-	for scheduleIndex := range roomSchedule.Schedules {
-		schedule := &roomSchedule.Schedules[scheduleIndex]
-		if strings.TrimSpace(schedule.Organizer.UserID) == "" || strings.TrimSpace(schedule.EventID) == "" {
-			continue
-		}
-
-		name, err := client.getOrganizerName(ctx, schedule.Organizer.UserID)
-		if err != nil {
-			log.Printf("DingTalk organizer name request failed for organizer %s: %v", schedule.Organizer.UserID, err)
-		} else {
-			schedule.Organizer.DisplayName = name
-		}
-
-		event, err := client.getCalendarEvent(ctx, schedule.Organizer.UserID, schedule.EventID)
-		if err != nil {
-			log.Printf("DingTalk event detail request failed for event %s: %v", schedule.EventID, err)
-			continue
-		}
-		if strings.TrimSpace(event.Summary) != "" {
-			schedule.Summary = event.Summary
-		}
-	}
 }
 
 func refreshDashboardScheduleCachePeriodically(
@@ -625,6 +451,11 @@ func buildMeetingRoomDashboard(
 		},
 		UpcomingMeetings: make([]dashboardMeeting, 0),
 	}
+	if metadata, roomNumber, found := meetingRoomMetadataForID(roomID); found {
+		response.Room.Number = roomNumber
+		response.Room.Name = metadata.Name
+		response.Room.Capacity = metadata.Capacity
+	}
 	for _, reservation := range reservations {
 		startTime, err := parseDingTalkTimestamp(reservation.StartTime)
 		if err != nil {
@@ -659,6 +490,15 @@ func buildMeetingRoomDashboard(
 	}
 
 	return response, nil
+}
+
+func meetingRoomMetadataForID(roomID string) (meetingRoomMetadata, string, bool) {
+	for roomNumber, metadata := range meetingRoomByNumber {
+		if metadata.DingTalkID == roomID {
+			return metadata, roomNumber, true
+		}
+	}
+	return meetingRoomMetadata{}, "", false
 }
 
 func reservationsForRoom(
@@ -724,8 +564,8 @@ func normalizeScheduleRequest(request meetingRoomScheduleRequest) (meetingRoomSc
 	if strings.TrimSpace(request.UserID) == "" {
 		return meetingRoomScheduleRequest{}, errors.New("userId is required")
 	}
-	if len(request.RoomIDs) == 0 || len(request.RoomIDs) > len(meetingRoomIDByNumber) {
-		return meetingRoomScheduleRequest{}, fmt.Errorf("roomIds must contain between 1 and %d items", len(meetingRoomIDByNumber))
+	if len(request.RoomIDs) == 0 || len(request.RoomIDs) > len(meetingRoomByNumber) {
+		return meetingRoomScheduleRequest{}, fmt.Errorf("roomIds must contain between 1 and %d items", len(meetingRoomByNumber))
 	}
 	for _, roomID := range request.RoomIDs {
 		if strings.TrimSpace(roomID) == "" {
