@@ -138,10 +138,6 @@
       .schedule-owner { margin-top: 3px; color: var(--muted); font-size: 13px; }
       .empty { padding: 28px 0; color: var(--muted); text-align: center; }
 
-      .booking { display: flex; align-items: center; gap: 16px; padding: 17px; margin-top: 24px; border: 1px dashed #aec7eb; border-radius: 15px; background: #f5faff; }
-      .qr { display: grid; width: 76px; height: 76px; flex: 0 0 auto; place-items: center; padding: 5px; border-radius: 7px; background: #fff; box-shadow: 0 2px 8px rgba(30, 78, 144, .13); }
-      .booking-title { color: #2259a7; font-size: 15px; font-weight: 750; }
-      .booking-help { margin-top: 6px; color: var(--muted); font-size: 12px; line-height: 1.4; }
 
       .footer { display: flex; align-items: center; justify-content: space-between; padding: 6px 34px; border-top: 1px solid var(--line); color: #8994a9; font-size: 12px; background: #fff; }
       .refresh-note { display: flex; gap: 6px; align-items: center; }
@@ -194,20 +190,6 @@
           <section class="panel schedule-panel" aria-labelledby="futureSchedule">
             <p class="section-label" id="futureSchedule">🕒 REMAINING SCHEDULE TODAY</p>
             <ul class="schedule-list" id="scheduleList"></ul>
-            <div class="booking">
-              <div class="qr" aria-label="DingTalk quick-booking QR code placeholder">
-                <svg viewBox="0 0 70 70" width="66" height="66" aria-hidden="true">
-                  <rect width="70" height="70" fill="white"/>
-                  <g fill="#152345">
-                    <path d="M4 4h19v19H4zm4 4v11h11V8zM47 4h19v19H47zm4 4v11h11V8zM4 47h19v19H4zm4 4v11h11V51zM29 5h5v5h-5zm7 0h5v5h-5zm-7 8h5v5h-5zm7 6h5v5h-5zm7-6h5v5h-5zm-14 12h5v5h-5zm7 0h5v5h-5zm7 0h5v5h-5zm14 0h5v5h-5zm-21 7h5v5h-5zm14 0h5v5h-5zm7 0h5v5h-5zm-21 7h5v5h-5zm7 0h5v5h-5zm14 0h5v5h-5zm7 0h5v5h-5zm-21 7h5v5h-5zm7 0h5v5h-5zm14 0h5v5h-5zm7 0h5v5h-5zm-14 7h5v5h-5zm7 0h5v5h-5z"/>
-                  </g>
-                </svg>
-              </div>
-              <div>
-                <div class="booking-title">📱 Scan to Book Quickly</div>
-                <div class="booking-help">Scan the QR code with DingTalk to view available times and book the room.</div>
-              </div>
-            </div>
           </section>
         </div>
 
@@ -221,7 +203,7 @@
     <script>
       const USE_MOCK_DATA = false;
       const ROOM_ID = new URLSearchParams(window.location.search).get("roomId")?.trim();
-      const API_BASE_URL = "http://172.18.110.32:8080";
+      const API_BASE_URL = "http://172.18.110.11:8080";
       const REFRESH_INTERVAL = 30_000;
       let currentMeetingEndAt;
 

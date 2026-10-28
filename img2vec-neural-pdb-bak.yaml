@@ -1,0 +1,35 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  annotations:
+    meta.helm.sh/release-name: weaviate
+    meta.helm.sh/release-namespace: weaviate
+  creationTimestamp: "2026-09-03T03:12:39Z"
+  generation: 1
+  labels:
+    app: img2vec-neural
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/name: weaviate
+    name: img2vec-neural
+  name: img2vec-neural
+  namespace: weaviate
+  resourceVersion: "2401748"
+  uid: 7e481d4c-8fba-4d1f-a634-3ba98cb3624b
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: img2vec-neural
+status:
+  conditions:
+  - lastTransitionTime: "2026-09-03T03:12:39Z"
+    message: ""
+    observedGeneration: 1
+    reason: InsufficientPods
+    status: "False"
+    type: DisruptionAllowed
+  currentHealthy: 1
+  desiredHealthy: 1
+  disruptionsAllowed: 0
+  expectedPods: 1
+  observedGeneration: 1
